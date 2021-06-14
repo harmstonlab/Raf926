@@ -1,0 +1,7 @@
+sample_id,condition,replicate
+WT_4,Control,"1"
+WT_5,Control,"2"
+WT_6,Control,"3"
+S926glc4,Mutant_LOF,"1"
+S926glc5,Mutant_LOF,"2"
+S926glc6,Mutant_LOF,"3"

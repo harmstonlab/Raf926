@@ -1,0 +1,110 @@
+---
+title: "Differential Expression"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+short=TRUE #if short==TRUE, do not echo code chunks
+debug=FALSE
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='figures/differentialexpression/',
+                      echo=!short, warning=debug, message=debug, dev=c("png", "pdf"))
+```
+
+```{r}
+source("analysis/functions.R")
+library(DESeq2)
+library(knitr)
+library(GenomicFeatures)
+library(RColorBrewer)
+library(gplots)
+library(biomaRt)
+library(grid)
+library(gridExtra)
+library(ggplot2)
+library(lattice)
+library(reshape)
+library(geneplotter)
+library(limma)
+library(dplyr)
+library(EnhancedVolcano)
+```
+
+```{r}
+## If the output directory doesn't exist, create it
+if(!dir.exists("analysis/output/DE")){
+  dir.create("analysis/output/DE")
+}
+```
+
+```{r load data}
+dds = readRDS("analysis/output/QC/dds_quality_control.rds")
+ensembl.genes= readRDS("analysis/output/QC/ensembl_genes.rds")
+lfc.threshold = log2(1.5)
+
+# Removing lowly expressed genes, only to be done once at the start of the differential expression step
+filter = apply(counts(dds, normalized=TRUE), 1, function(x){ mean(x) >= 10 })
+dds = dds[filter, ]
+```
+
+## Wald Test
+```{r}
+dds = nbinomWaldTest(dds)
+```
+
+### Mutant LOF (S926glc) vs Control(WT)
+```{r}
+# Note the order of Mutant_LOF and Control -- Control here is the denominator
+results_mut_control = results(dds, contrast = c("condition", "Mutant_LOF", "Control"),  filter=rowMeans(counts(dds, normalized=TRUE)), test="Wald", alpha=0.1, independentFiltering=TRUE)
+
+results_mut_control$gene_biotype = ensembl.genes$gene_biotype[match(row.names(results_mut_control), ensembl.genes$gene_id)]
+results_mut_control$external_gene_name = ensembl.genes$external_gene_name[match(row.names(results_mut_control), ensembl.genes$gene_id)]
+
+hist(results_mut_control$pvalue, xlab = "p-value", ylab = "Frequency")
+```
+**Number of significant genes (padj < 0.1 & log2FoldChange < log2(1.5)):**
+```{r}
+sum(results_mut_control$padj < 0.1 & abs(results_mut_control$log2FoldChange) > lfc.threshold, na.rm = T)
+```
+
+```{r}
+### Writing out .csv files
+write_files(results_mut_control, "mut", "control")
+
+### Volcano plot
+generate_volcano(results_mut_control,"Mutant_LOF (S926glc)","Control(WT)")
+
+### MA plot
+generate_ma(results_mut_control)
+```
+
+
+```{r extract significant transcripts}
+## Get significant genes by 10% FDR and log2FC greater than log2(1.5)
+sig_padj_genes <- results_mut_control[!is.na(results_mut_control$padj),]
+sig_padj_genes <- sig_padj_genes[sig_padj_genes$padj < 0.1,]
+sig_padj_fc_genes <- sig_padj_genes[abs(sig_padj_genes$log2FoldChange) > lfc.threshold,]
+
+## Get the rld for all differentially expressed genes & rld for significant genes
+rld <- rlog(dds)
+significant_rld <- rld[rownames(sig_padj_fc_genes)]
+```
+
+```{r save data}
+## This writes out csv file of significant DE genes by both FDR 10% and FC (log2(1.5))
+write.csv(sig_padj_fc_genes, "analysis/output/DE/significant_de_genes.csv", row.names = TRUE, col.names = TRUE)
+
+## Saving RDS files
+saveRDS(dds, "analysis/output/DE/dds_de.rds")
+saveRDS(significant_rld, "analysis/output/DE/significant_rld.rds")
+saveRDS(sig_padj_fc_genes, "analysis/output/DE/wald_sig_results.rds")
+saveRDS(results_mut_control, "analysis/output/DE/wald_all_results.rds")
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

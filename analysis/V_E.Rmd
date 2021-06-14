@@ -1,0 +1,519 @@
+---
+title: "Analysis of Dorsal Targets in Raf LOF Mutation"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+short=TRUE #if short==TRUE, do not echo code chunks
+debug=FALSE
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='figures/vis_enrichments/',
+                      echo=!short, warning=debug, message=debug, dev=c("png", "pdf"))
+```
+
+```{r loading libraries, include=FALSE}
+source("analysis/functions.R")
+library(DESeq2)
+library(knitr)
+library(GenomicFeatures)
+library(RColorBrewer)
+library(grid)
+library(gridExtra)
+library(lattice)
+library(reshape)
+library(geneplotter)
+library(pheatmap)
+library(Biostrings)
+library(BSgenome.Dmelanogaster.UCSC.dm6)
+library(clusterProfiler)
+library(ReactomePA)
+library(enrichplot)
+library(stringr)
+library(tidyverse)
+library(DT)
+library(data.table)
+library(ggpubr)
+library(cowplot)
+library(ggrepel)
+library(msigdbr)
+options(connectionObserver = NULL)
+#BiocManager::install("org.Dm.eg.db", character.only = TRUE)
+library("org.Dm.eg.db", character.only = TRUE)
+library(pathview)
+library(reactome.db)
+library(fgsea)
+library(enrichR)
+library(VennDiagram)
+library(png)
+```
+
+```{r}
+## If the directory doesn't exist, create it
+if(!dir.exists("analysis/output/V_E")){
+  dir.create("analysis/output/V_E")
+}
+```
+
+```{r loading in data, include=FALSE}
+## Outputs required from QC.Rmd
+experimental_metadata <- readRDS("analysis/output/QC/experimental_metadata.rds")
+tpm <- readRDS("analysis/output/QC/tpm.rds")
+ensembl_genes <- readRDS("analysis/output/QC/ensembl_genes.rds")
+
+## Outputs required from DE.Rmd
+dds <- readRDS("analysis/output/DE/dds_de.rds")
+significant_rld <- readRDS("analysis/output/DE/significant_rld.rds")
+wald_sig <- readRDS("analysis/output/DE/wald_sig_results.rds")
+wald_all <- readRDS("analysis/output/DE/wald_all_results.rds")
+
+## Global Variables
+options(ggrepel.max.overlaps = Inf) ##ggrepel option
+nc <- counts(dds, normalized = TRUE) ##normalised counts
+lfc.threshold = log2(1.5) ##log2fc threshold
+wald_all$entrez_id = ensembl_genes$entrezgene_id[match(row.names(wald_all), ensembl_genes$gene_id)]
+wald_all_df <- wald_all %>%
+  as.data.frame()
+wald_sig$entrez_id = ensembl_genes$entrezgene_id[match(row.names(wald_sig), ensembl_genes$gene_id)]
+wald_sig_df <- as.data.frame(wald_sig)
+```
+
+```{r z-score transformation}
+# assay(x) to access the count data
+sig_mat_rld = assay(significant_rld)
+
+# The apply function swaps the rows to samples and columns to genes -- the standard is the other way around: samples in cols and genes in rows, hence the transpose function
+zscores = t(apply(sig_mat_rld, 1, function(x){ (x - mean(x)) / sd(x) }))
+```
+
+```{r heatmap annotation}
+## >> !! NOTE !! The annotation needs to be in the correct order as the condition in the metadata.txt
+annotation = data.frame(Condition = rep(c("Control", "Mutant_LOF"),
+                                            c(3, 3)))
+
+row.names(annotation) = experimental_metadata$sample_id 
+anno_colours = list(Condition = c(Control = "#72147e", Mutant_LOF= "#fea82f"), 
+                    Germ_Layer = c(Ectoderm = "#45526c", Mesoderm = "#5aa897", Neuroectoderm = "#d2e69c"))
+```
+
+## Heatmap
+```{r}
+oe <-
+  wald_sig %>% 
+  as.data.frame() %>%
+  filter(log2FoldChange > 0) %>%
+  arrange(padj)
+
+ue <-
+  wald_sig %>% 
+  as.data.frame() %>%
+  filter(log2FoldChange < 0) %>%
+  arrange(padj)
+
+sig_genes <- rbind(oe, ue)
+
+## So that the zscores are arranged in the order of oe and ue
+zscores= zscores[rownames(sig_genes),]
+
+pheatmap(zscores,
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+         annotation = annotation,
+         annotation_colors = anno_colours,
+         cluster_rows = F, 
+         cluster_cols = F)
+```
+
+## Number of Genes
+
+```{r extracting genes}
+data.frame(Cluster = c("Upregulated_MUT", "Downregulated_MUT", "Total"),
+                        Number_of_genes = c(nrow(oe),
+                                            nrow(ue),
+                                            (nrow(oe)+nrow(ue))))
+```
+
+## Volcano Plot of Significant Genes
+```{r}
+make_volcano_with_labels(wald_sig, "", "Volcano Plot: S926glc(Mutant_LOF) vs. WT")
+```
+
+## Volcano Plot of All Expressed Genes
+```{r}
+make_volcano_with_labels(wald_all, "", "Volcano Plot: S926glc(Mutant_LOF) vs. WT")
+```
+
+## Enrichments with EnrichR
+
+```{r}
+setEnrichrSite("FlyEnrichr")
+dbs <- listEnrichrDbs()
+to_check <- c("GO_Biological_Process_2018", "KEGG_2019")
+```
+
+### Upregulated in Mutant
+```{r}
+oe_enrichr <- oe$external_gene_name
+eresList <- enrichr(oe_enrichr, databases = to_check)
+
+eresList$GO_Biological_Process_2018  %>% 
+  plot_enrichr(name = "GO_Biological_Process_2018")
+eresList$GO_Biological_Process_2018  %>% 
+  datatable(options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$GO_Biological_Process_2018 %>%
+  write.csv("analysis/output/V_E/upregulated_go.csv", row.names = TRUE, col.names = TRUE)
+
+eresList$KEGG_2019  %>% 
+  plot_enrichr(name = "KEGG_2019")
+eresList$KEGG_2019  %>% 
+  datatable(options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$KEGG_2019 %>%
+  write.csv("analysis/output/V_E/upregulated_kegg.csv", row.names = TRUE, col.names = TRUE)
+```
+
+### Downregulated in Mutant
+```{r}
+ue_enrichr <- ue$external_gene_name
+eresList <- enrichr(ue_enrichr, databases = to_check)
+
+eresList$GO_Biological_Process_2018  %>% 
+  plot_enrichr(name = "GO_Biological_Process_2018")
+eresList$GO_Biological_Process_2018  %>% 
+  datatable(options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$GO_Biological_Process_2018 %>%
+  write.csv("analysis/output/V_E/downregulated_go.csv", row.names = TRUE, col.names = TRUE)
+
+
+eresList$KEGG_2019  %>% 
+  plot_enrichr(name = "KEGG_2019")
+eresList$KEGG_2019  %>% 
+  datatable(options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$KEGG_2019 %>%
+  write.csv("analysis/output/V_E/downregulated_kegg.csv", row.names = TRUE, col.names = TRUE)
+```
+
+
+## GSEA Analysis
+### clusterProfiler
+#### Using MSigDB C5
+```{r}
+## Use the MSigDB R package to download C5 -- Ontology -- gene sets for Drosophila. Check MSigDB websites for other categories.
+gene_sets <- msigdbr(species = "Drosophila melanogaster", category = "C5")
+gene_sets <- gene_sets %>%
+  dplyr::select(gs_name, gene_symbol)
+
+## 1. Rank genes in results
+gsea_prep <- wald_all_df %>%
+  arrange(padj) %>%
+  mutate(padj = case_when(padj == 0 ~ .Machine$double.xmin, TRUE ~ padj)) %>%
+  mutate(gsea_metric = -log10(padj) * sign(log2FoldChange)) %>%
+  filter(!is.na(gsea_metric)) %>%
+  arrange(desc(gsea_metric))
+
+## 2. Get vector of gene names with their ranking
+gsea_ranks <- gsea_prep %>% 
+  dplyr::select(external_gene_name, gsea_metric) %>%
+  distinct(external_gene_name, .keep_all = TRUE) %>%
+  deframe()
+
+## 3. Run GSEA to get enrichments
+gsea_res <- GSEA(geneList = gsea_ranks,
+                TERM2GENE = gene_sets)
+
+gsea_res %>% 
+  data.frame() %>%
+  datatable(options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+#gseaplot(gsea_res,"GO_DORSAL_VENTRAL_PATTERN_FORMATION", title = "Dorsal Ventral Pattern Formation")
+```
+
+## Pathway Visualisation
+```{r}
+## getting kegg enrichments
+kegg = enrichKEGG(gene = wald_sig$entrez_id, 
+                     organism = "dme",
+                     keyType="ncbi-geneid", 
+                     universe=as.character(na.omit(ensembl_genes[rownames(counts(dds))]$entrezgene_id)))
+
+kegg_df <- kegg@result %>%
+  data.frame()
+```
+
+```{r}
+wald_fc = wald_all$log2FoldChange
+names(wald_fc) = wald_all$entrez_id
+
+## extracting the pathway IDs of interest
+pathways_interest = data.frame()
+
+toll = kegg_df %>%
+  filter(grepl("Toll",Description, fixed = TRUE))
+
+mapk = kegg_df %>%
+  filter(grepl("MAPK",Description))
+
+pathways_interest = rbindlist(list(pathways_interest, toll, mapk))
+
+pid = pathways_interest$ID
+
+## This function annoyingly prints out png files to the main directory
+plot_pathview = function(pid){pathview(gene.data=wald_fc, pathway.id=pid, species="dme", new.signature=FALSE, limit=list(gene=2, cpd=1), low = list(gene = "#4575b4", cpd = "#4575b4"), mid = list(gene = "white", cpd = "gray"), high = list(gene = "#d73027", cpd = "yellow"))}
+
+## Applying the function above to pathway IDs. Assigning it to random variable because it returns an empty object. 
+tmp = sapply(pid, plot_pathview)
+```
+
+### Toll Signalling Pathway
+```{r}
+toll_png <- readPNG("dme04624.pathview.png")
+p <- rasterGrob(toll_png, interpolate = TRUE)
+ggarrange(p)
+```
+
+### MAPK Signalling Pathway
+```{r}
+mapk_png <- readPNG("dme04013.pathview.png")
+p <- rasterGrob(mapk_png, interpolate = TRUE)
+ggarrange(p)
+```
+
+## Dorsal Target Genes
+### Dorsal Targets in the Mesoderm
+```{r}
+known_meso_targets = c("FBgn0000719", "FBgn0010389", "FBgn0011656", "FBgn0003448", "FBgn0004110", "FBgn0003900", "FBgn0004606")
+mi_meso_targets = c("FBgn0014380", "FBgn0037207", "FBgn0044049", "FBgn0034726", "FBgn0004512", "FBgn0000044", "FBgn0000116", "FBgn0034075", "FBgn0032693", "FBgn0014179", "FBgn0286786", "FBgn0003308", "FBgn0020299","FBgn0262139")
+
+all_meso_targets = c(known_meso_targets, mi_meso_targets)
+meso_gene_names = sig_genes[rownames(sig_genes) %in% all_meso_targets,] 
+
+zscores_meso = get_zscores(zscores, meso_gene_names)
+
+(pheatmap(zscores_meso,
+           color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+           fontsize_row = 10,
+           annotation_col = annotation,
+           annotation_colors = anno_colours,
+           cluster_rows = FALSE,
+           cluster_cols = FALSE,
+           border_color = NA))
+
+```
+
+```{r fig.width=15,fig.height=15}
+nc_meso = get_df(all_meso_targets)
+nc_meso = nc_meso[order(row.names(nc_meso)),]
+
+legend <- extracting_legend(nc_meso, 1)
+
+## use rownames(nc_meso) to check which names to use
+act57b <- gene_boxplot(nc_meso, "Act57B", 0, 100000)
+argk <- gene_boxplot(nc_meso, "Argk", 0, 15000)
+asph <- gene_boxplot(nc_meso, "Asph", 0, 5000)
+cyp <- gene_boxplot(nc_meso, "Cyp310a1", 0, 1200)
+fog <- gene_boxplot(nc_meso, "fog", 2000, 4000)
+gcm <- gene_boxplot(nc_meso, "gcm", 0, 2000)
+htl <- gene_boxplot(nc_meso, "htl", 0, 1750)
+ilp <- gene_boxplot(nc_meso, "Ilp4", 0, 4000)
+mdr <- gene_boxplot(nc_meso, "Mdr49", 500, 2000)
+mef <- gene_boxplot(nc_meso, "Mef2", 0000, 8000)
+mes2 <- gene_boxplot(nc_meso, "Mes2", 2000, 4000)
+mes4 <- gene_boxplot(nc_meso, "Mes4", 200, 600)
+rhol <- gene_boxplot(nc_meso, "RhoL", 400, 1000)
+ry <- gene_boxplot(nc_meso, "ry", 500, 1750)
+sna <- gene_boxplot(nc_meso, "sna", 0, 3000)
+stumps <- gene_boxplot(nc_meso, "stumps", 0, 6000)
+tin <- gene_boxplot(nc_meso, "tin", 0, 1000)
+trh <- gene_boxplot(nc_meso, "trh", 0, 3500)
+twi <- gene_boxplot(nc_meso, "twi", 0, 3000)
+zfh <- gene_boxplot(nc_meso, "zfh1", 500, 5000)
+ 
+all_plots <- plot_grid(plotlist = list(act57b, argk, asph, cyp,fog, gcm,htl,ilp,mdr,mef,mes2,mes4,rhol,ry,sna,stumps,tin,trh,twi,zfh), nrow = ceiling(length(rownames(nc_meso))/5), ncol = 5)
+plot_grid(legend, all_plots, nrow = 2, ncol = 1, rel_heights = c(.1, 1))
+```
+
+```{r}
+make_volcano_with_labels(wald_all, all_meso_targets, title = "Dorsal Targets in the Mesoderm")
+```
+
+#### Hypergeometric Test
+```{r, echo=TRUE}
+q = nrow(zscores_meso)
+m = nrow(zscores_meso)
+n = nrow(counts(dds)) - nrow(zscores_meso)
+k = nrow(ue)
+  
+phyper(q, m, n, k, lower.tail = FALSE)
+```
+
+
+### Dorsal Targets in the Neuroectoderm
+```{r}
+known_neuroecto_targets = c("FBgn0024250", "FBgn0025776", "FBgn0002561", "FBgn0004635", "FBgn0004666", "FBgn0003463", "FBgn0261930")
+mi_neuroecto_targets = c("FBgn0033159", "FBgn0037085", "FBgn0265140", "FBgn0033652", "FBgn0040271", "FBgn0000547", "FBgn0002543", "FBgn0003892", "FBgn0043575", "FBgn0003326", "FBgn0041184", "FBgn0029123", "FBgn0011739")
+
+all_neuroecto_targets = c(known_neuroecto_targets, mi_neuroecto_targets)
+neuroecto_gene_names = sig_genes[rownames(sig_genes) %in% all_neuroecto_targets,] 
+
+zscores_neuroecto = get_zscores(zscores, neuroecto_gene_names)
+
+(pheatmap(zscores_neuroecto,
+           color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+           fontsize_row = 10,
+           annotation_col = annotation,
+           annotation_colors = anno_colours,
+           cluster_rows = FALSE,
+           cluster_cols = FALSE,
+           border_color = NA))
+```
+
+```{r fig.width=15,fig.height=15}
+nc_neuroecto = get_df(all_neuroecto_targets)
+nc_neuroecto = nc_neuroecto[order(row.names(nc_neuroecto)),]
+
+legend <- extracting_legend(nc_neuroecto, 1)
+
+brk <- gene_boxplot(nc_neuroecto, "brk", 0, 3000)
+dscam <- gene_boxplot(nc_neuroecto, "Dscam1", 2000, 8000)
+ed <- gene_boxplot(nc_neuroecto, "ed", 20000, 30000)
+ind <- gene_boxplot(nc_neuroecto, "ind", 0, 350)
+lsc <- gene_boxplot(nc_neuroecto, "l(1)sc", 0, 2500)
+meltrin <- gene_boxplot(nc_neuroecto, "Meltrin", 2000, 4000)
+neu <- gene_boxplot(nc_neuroecto, "Neu2", 0, 400)
+pgrp <- gene_boxplot(nc_neuroecto, "PGRP-SC2", 0, 300)
+ptc <- gene_boxplot(nc_neuroecto, "ptc", 1000, 10000)
+rho <- gene_boxplot(nc_neuroecto, "rho", 0, 1000)
+robo2 <- gene_boxplot(nc_neuroecto, "robo2", 5000, 20000)
+sca <- gene_boxplot(nc_neuroecto, "sca", 0, 8000)
+sim <- gene_boxplot(nc_neuroecto, "sim", 0, 500)
+socs <- gene_boxplot(nc_neuroecto, "Socs36E", 1000, 5000)
+sog <- gene_boxplot(nc_neuroecto, "sog", 0, 2500)
+soxn <- gene_boxplot(nc_neuroecto, "SoxN", 0, 8000)
+sulf <- gene_boxplot(nc_neuroecto, "Sulf1", 3000, 5000)
+ths <- gene_boxplot(nc_neuroecto, "ths", 1000, 2500)
+vnd <- gene_boxplot(nc_neuroecto, "vnd", 0, 800)
+wts <- gene_boxplot(nc_neuroecto, "wts", 2000, 4000)
+
+all_plots <- plot_grid(plotlist = list(brk,dscam,ed,ind,lsc,meltrin,neu,pgrp,ptc,rho,robo2,sca,sim,socs,sog,soxn,sulf,ths,vnd,wts), nrow = ceiling(length(rownames(nc_neuroecto))/5), ncol = 5)
+plot_grid(legend, all_plots, nrow = 2, ncol = 1, rel_heights = c(.1, 1))
+```
+
+```{r}
+make_volcano_with_labels(wald_all, all_neuroecto_targets, title = "Dorsal Targets in the Neuroectoderm")
+```
+
+#### Hypergeometric Test
+```{r, echo=TRUE}
+q = nrow(zscores_neuroecto)
+m = nrow(zscores_neuroecto)
+n = nrow(counts(dds)) - nrow(ue)
+k = nrow(ue)
+  
+phyper(q, m, n, k, lower.tail = FALSE)
+```
+
+### Dorsal Targets in the Ectoderm
+```{r}
+# These are supposed to go up in mutant
+
+known_ecto_targets = c("FBgn0000490", "FBgn0003117", "FBgn0012037", "FBgn0003719", "FBgn0003896", "FBgn0003963", "FBgn0004053")
+mi_ecto_targets = c("FBgn0033483", "FBgn0028789", "FBgn0260746", "FBgn0262579", "FBgn0004863", "FBgn0014454", "FBgn0020637")
+
+all_ecto_targets = c(known_ecto_targets, mi_ecto_targets)
+ecto_gene_names = sig_genes[rownames(sig_genes) %in% all_ecto_targets,] 
+
+zscores_ecto = get_zscores(zscores, ecto_gene_names)
+
+(pheatmap(zscores_ecto,
+           color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+           fontsize_row = 10,
+           annotation_col = annotation,
+           annotation_colors = anno_colours,
+           cluster_rows = FALSE,
+           cluster_cols = FALSE,
+           border_color = NA))
+```
+
+```{r}
+nc_ecto = get_df(all_ecto_targets)
+nc_ecto = nc_ecto[order(row.names(nc_ecto)),]
+
+legend <- extracting_legend(nc_ecto, 1)
+
+ance <- gene_boxplot(nc_ecto, "Ance", 5000, 15000)
+c15 <- gene_boxplot(nc_ecto, "C15", 0, 2000)
+doc1 <- gene_boxplot(nc_ecto, "Doc1", 0, 1500)
+dpp <- gene_boxplot(nc_ecto, "dpp", 1000, 1600)
+ect <- gene_boxplot(nc_ecto, "Ect3", 1500, 3000)
+egr <- gene_boxplot(nc_ecto, "egr", 1000, 1600)
+lcp <- gene_boxplot(nc_ecto, "Lcp65Ag2", 0, 60000)
+pnr <- gene_boxplot(nc_ecto, "pnr", 1000, 5000)
+sarm <- gene_boxplot(nc_ecto, "Sarm", 1500, 6500)
+tld <- gene_boxplot(nc_ecto, "tld", 500, 1200)
+tup <- gene_boxplot(nc_ecto, "tup", 2000, 6000)
+ush <- gene_boxplot(nc_ecto, "ush", 2000, 6000)
+zen <- gene_boxplot(nc_ecto, "zen", 0, 600)
+
+all_plots <- plot_grid(plotlist = list(ance,c15,doc1,dpp,ect,egr,lcp,pnr,sarm,tld,tup,ush,zen), nrow = ceiling(length(rownames(nc_ecto))/5), ncol = 5)
+plot_grid(legend, all_plots, nrow = 2, ncol = 1, rel_heights = c(.1, 1))
+```
+
+```{r}
+make_volcano_with_labels(wald_all, all_ecto_targets, title = "Dorsal Targets in the Ectoderm")
+```
+
+#### Hypergeometric Test
+```{r, echo=TRUE}
+q = nrow(zscores_ecto) - 1
+m = nrow(zscores_ecto)
+n = nrow(counts(dds)) - nrow(oe)
+k = nrow(oe)
+  
+phyper(q, m, n, k, lower.tail = FALSE)
+```
+
+### Combined Heatmap
+```{r}
+comb_meso = all_meso_targets[all_meso_targets %in% rownames(sig_genes)]
+comb_neuroecto = all_neuroecto_targets[all_neuroecto_targets %in% rownames(sig_genes)]
+comb_ecto = all_ecto_targets[all_ecto_targets %in% rownames(sig_genes)]
+all_dorsal_targets = c(comb_meso, comb_neuroecto, comb_ecto)
+all_gene_names = sig_genes[rownames(sig_genes) %in% all_dorsal_targets,]
+all_gene_names$Germ_Layer = "Mesoderm"
+all_gene_names[rownames(all_gene_names) %in% comb_neuroecto,]$Germ_Layer = "Neuroectoderm"
+all_gene_names[rownames(all_gene_names) %in% comb_ecto,]$Germ_Layer = "Ectoderm"
+
+zscores_all = get_zscores(zscores, all_gene_names)
+
+anno_row <- all_gene_names %>%
+  dplyr::select(external_gene_name, Germ_Layer) %>%
+  remove_rownames() %>%
+  column_to_rownames("external_gene_name") %>%
+  arrange(Germ_Layer)
+
+zscores_all = zscores_all[rownames(anno_row),]
+
+(pheatmap(zscores_all,
+           color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+           fontsize_row = 10,
+           annotation_col = annotation,
+           annotation_colors = anno_colours,
+           annotation_row = anno_row,
+           cluster_rows = FALSE,
+           cluster_cols = FALSE,
+           border_color = NA))
+```
+
+
+```{r write out files}
+## to be used in Koenecke Analysis
+saveRDS(oe, "analysis/output/V_E/oe.rds")
+saveRDS(ue, "analysis/output/V_E/ue.rds")
+```
+
+
+## Session Info
+```{r}
+sessionInfo()
+```

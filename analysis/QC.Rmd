@@ -1,0 +1,307 @@
+---
+title: "Quality Control"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r global_options, echo=FALSE}
+short=TRUE #if short==TRUE, do not echo code chunks
+debug=FALSE
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='./figures/qualitycontrol/',
+                      echo=!short, warning=debug, message=debug, dev=c("png", "pdf"))
+```
+
+```{r}
+library(DESeq2)
+library(ggplot2)
+library(genefilter)
+library(GenomicFeatures)
+library(biomaRt)
+library(knitr)
+library(reshape2)
+library(scales)
+library(Biostrings)
+library(kableExtra)
+```
+
+```{r cache=TRUE}
+dm.gtf.db <- makeTxDbFromGFF("data/annotation/Drosophila_melanogaster.BDGP6.22.97.chr.gtf", format="gtf" )
+ensembl.genes = genes(dm.gtf.db)
+fruitfly = useEnsembl(biomart="genes", dataset="dmelanogaster_gene_ensembl", host = "asia.ensembl.org", mirror = "asia")
+bm.annotations = getBM(attributes=c("ensembl_gene_id", "entrezgene_id", "gene_biotype", "external_gene_name"), mart=fruitfly, filters="ensembl_gene_id", values=ensembl.genes$gene_id, uniqueRows=TRUE)
+ensembl.genes$gene_biotype = bm.annotations$gene_biotype[match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ]
+ensembl.genes$entrezgene_id = bm.annotations$entrezgene_id[match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ]
+ensembl.genes$external_gene_name = bm.annotations$external_gene_name[match(ensembl.genes$gene_id, bm.annotations$ensembl_gene_id) ]
+```
+
+```{r loading data}
+experimental_metadata = read.delim("analysis/metadata.txt", sep=",", header=TRUE, stringsAsFactors=FALSE)
+
+#Create a matrix of the data (nrow can be obtained by calling wc -l *.genes.results in terminal; note -1 for header)
+#Note that the nrow for this now changes since we've added the construct
+data = matrix(0, ncol=length(experimental_metadata$sample_id), nrow=17714)
+colnames(data)= experimental_metadata$sample_id
+for( i in experimental_metadata$sample_id){
+  data[,i] = read.table(paste("data/aligned/", i, ".genes.results",sep=""), sep="\t", header=TRUE)$expected_count
+}
+row.names(data) = read.table(paste("data/aligned/", i, ".genes.results",sep=""), sep="\t", header=TRUE)$gene_id
+
+#Create a factor for the condition column - by making it a factor you give it an order
+experimental_metadata$condition = factor(experimental_metadata$condition, levels=c("Control", "Mutant_LOF"))
+
+#Create a factor for the replicate column - by making it a factor you give it an order
+experimental_metadata$replicate = factor(experimental_metadata$replicate, levels=c("1", "2", "3"))
+
+#DESeq needs read counts to be integers
+data_mat = apply(round(data), c(1,2), as.integer)
+
+#Specifying which group is the control group to make appropriate contrasts downstream
+#experimental_metadata$condition <- relevel(experimental_metadata$condition, ref = "Control")
+
+#Creates the DESeq2 object
+#Since there aren't any batch effects, we don't need to take those into account
+dds = DESeqDataSetFromMatrix(data_mat, experimental_metadata, ~ condition)
+colnames(dds) = colnames(data_mat)
+
+#Estimates the size factors using the "median ratio method" described by Equation 5 in Anders and Huber (2010)
+dds <- estimateSizeFactors(dds) 
+
+#This function obtains dispersion estimates for a count data set
+dds <- estimateDispersions(dds)
+
+#This function transforms the count data to the log2 scale in a way which minimizes differences between samples for rows with small counts
+rld <- rlog(dds)
+```
+
+
+### Sample clustering
+```{r hclust}
+sampleDists <- dist(t(assay(rld)))
+plot(hclust(sampleDists))
+```
+
+### PCA
+```{r pca_samples}
+ntop = 500
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, length(rv)))]
+pca = prcomp(t(assay(rld)[select,]))
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+
+set.seed(1)
+(pca_data <- plotPCA(rld, intgroup = c("condition", "replicate"), returnData=TRUE))
+percentVar <- round(100 * attr(pca_data, "percentVar"), digits=2)
+ggplot(pca_data, aes(PC1, PC2, color=condition, shape=replicate)) + geom_point(size=3) +
+  scale_x_continuous(paste0("PC1: ",percentVar[1],"% variance")) +
+  scale_y_continuous(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() + theme_classic() + geom_text(data = pca_data, aes(PC1,PC2, label = name), hjust = 1.2)
+```
+
+### Number of genes detected
+```{r number_of_genes}
+detected = apply(counts(dds), 2, function(col) sum(col > 0 ))
+detected = as.data.frame(detected)
+detected$name = row.names(detected)
+detected$name = factor(detected$name, experimental_metadata$sample_id)
+ggplot(detected, aes(x=name, y=detected)) + geom_bar(stat="identity") + theme_classic() + coord_flip() + scale_y_continuous("Number of Genes detected", expand=c(0,0)) + scale_x_discrete("Sample")
+```
+
+### rRNA percentage
+```{r percentage-rRNA}
+rrna.genes = names(ensembl.genes[ensembl.genes$gene_biotype %in% c("Mt_rRNA", "rRNA" )])
+percentage.of.rrna = (colSums(counts(dds[ rownames(counts(dds)) %in% rrna.genes])) / colSums(counts(dds))) * 100
+
+percentage.of.rrna = as.data.frame(percentage.of.rrna)
+percentage.of.rrna$name = row.names(percentage.of.rrna)
+percentage.of.rrna$name = factor(percentage.of.rrna$name, experimental_metadata$sample_id)
+ggplot(percentage.of.rrna, aes(x=name, y=percentage.of.rrna)) + geom_bar(stat="identity") + theme_classic() + coord_flip() + scale_y_continuous("% rRNA", expand=c(0,0)) + scale_x_discrete("Sample")
+```
+
+### Proportions of gene biotypes
+```{r reads_genebiotype}
+pc = ensembl.genes$gene_id[ensembl.genes$gene_biotype == "protein_coding"]
+pg = ensembl.genes$gene_id[ensembl.genes$gene_biotype %in% unique(ensembl.genes$gene_biotype)[grep("pseudogene", unique(ensembl.genes$gene_biotype))]]
+lc = ensembl.genes$gene_id[ensembl.genes$gene_biotype == "lincRNA"]
+
+totalcounts.pc = colSums(counts(dds)[rownames(counts(dds)) %in% pc,])
+totalcounts.pg = colSums(counts(dds)[rownames(counts(dds)) %in% pg,])
+totalcounts.lc = colSums(counts(dds)[rownames(counts(dds)) %in% lc,])
+
+totalcounts.other = colSums(counts(dds)[!(rownames(counts(dds)) %in% c(lc,pc,pg)),])
+
+counts.by.biotype = data.frame(name = names(totalcounts.pc),
+                         protein_coding = totalcounts.pc,
+                         pseudogene = totalcounts.pg,
+                         lincRNA = totalcounts.lc,
+                         other = totalcounts.other
+                         
+                         )
+
+counts.by.biotype$name = factor(counts.by.biotype$name, experimental_metadata$sample_id)
+
+counts.by.biotype = as.data.frame(t(apply(counts.by.biotype[,2:5], 1, function(x){ 100 * (x / sum(x)) }) ))
+counts.by.biotype$name = names(totalcounts.pc)
+counts.by.biotype$name = factor(counts.by.biotype$name, experimental_metadata$sample_id)
+
+counts.by.biotype.melt = melt(counts.by.biotype)
+ggplot(counts.by.biotype.melt, aes(x=name, y=value, fill=variable)) +  geom_bar(stat="identity") + theme_classic() + scale_y_continuous("% reads", labels = dollar_format(suffix = "%", prefix = ""),  expand=c(0,0)) + scale_x_discrete("Sample") + theme(axis.text.x = element_text(angle = 45, colour="black", hjust = 1, size=8))
+```
+
+### Remove rRNA from the analysis
+```{r, echo = TRUE}
+dds = dds[!(row.names(counts(dds)) %in% ensembl.genes$gene_id[ensembl.genes$gene_biotype %in% c("rRNA", "snoRNA", "snRNA")]),]
+dds = dds[rowSums(counts(dds)) > 0,]
+```
+
+### Check rRNA removed
+```{r}
+rrna.genes = names(ensembl.genes[ensembl.genes$gene_biotype %in% c("rRNA", "snoRNA", "snRNA")])
+percentage.of.rrna = (colSums(counts(dds[ rownames(counts(dds)) %in% rrna.genes])) / colSums(counts(dds))) * 100
+
+percentage.of.rrna = as.data.frame(percentage.of.rrna)
+percentage.of.rrna$name = row.names(percentage.of.rrna)
+percentage.of.rrna$name = factor(percentage.of.rrna$name, experimental_metadata$sample_id)
+ggplot(percentage.of.rrna, aes(x=name, y=percentage.of.rrna)) + geom_bar(stat="identity") + theme_classic() + coord_flip() + scale_y_continuous("% rRNA", expand=c(0,0)) + scale_x_discrete("Sample")
+```
+
+### Check chrM intact
+```{r}
+in_dds = ensembl.genes[which(rownames(dds) %in% ensembl.genes$gene_id)]
+table(seqnames(in_dds))
+```
+
+### Clustering after rRNA removal
+```{r clustering_filt}
+dds <- estimateSizeFactors(dds) 
+dds <- estimateDispersions(dds)
+rld <- rlog(dds)
+
+sampleDists <- dist(t(assay(rld)))
+plot(hclust(sampleDists))
+```
+
+### PCA after rRNA removal
+```{r pca_samples_filt}
+ntop = 500
+rv <- rowVars(assay(rld))
+select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, length(rv)))]
+pca = prcomp(t(assay(rld)[select,]))
+percentVar <- pca$sdev^2/sum(pca$sdev^2)
+
+(pca_data <- plotPCA(rld, intgroup = c("condition", "replicate"), returnData=TRUE))
+percentVar <- round(100 * attr(pca_data, "percentVar"), digits=2)
+ggplot(pca_data, aes(PC1, PC2, color=condition, shape=replicate)) + geom_point(size=3) +
+  scale_x_continuous(paste0("PC1: ",percentVar[1],"% variance")) +
+  scale_y_continuous(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() + theme_classic() + geom_text(data = pca_data, aes(PC1,PC2, label = name), hjust = 1.2)
+
+```
+
+### Size Factors
+```{r size factors}
+print(sizeFactors(dds))
+df = data.frame(sample_id = names(sizeFactors(dds)), sizeFactors = sizeFactors(dds))
+
+ggplot(df, aes(x = sample_id, y=sizeFactors)) + geom_bar(stat="identity") + scale_y_continuous(limits=c(0,2), expand=c(0,0)) + theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust=1, colour="black", size=12))
+```
+
+### MA Plots
+```{r ma-plots}
+for(cd in unique(experimental_metadata$condition)){
+  samples = experimental_metadata$sample_id[experimental_metadata$condition == cd]
+  for(i in 1:(length(samples)-1)){
+      print(i)
+      for(j in (i+1):(length(samples))){
+        print(j)
+        
+        x = counts(dds, normalized=TRUE)[, samples[i]]
+        y = counts(dds, normalized=TRUE)[, samples[j]]
+      
+        M = log2(x) - log2(y)
+        A = (log2(x) + log2(y)) / 2
+        df = data.frame(gene_id = names(x), M=M, A=A)
+      
+        print(ggplot(df, aes(x=A, y=M)) + geom_point(size = 1.5, alpha = 1/5) + theme_classic() + geom_hline(yintercept=0, colour="blue3", linetype="dashed") + ggtitle(paste(samples[i], "vs", samples[j],  median(abs(x-y)), sep= " ")) + stat_smooth(se = FALSE, method = "loess", color = "red3") + theme_classic())
+    }
+  }
+}
+```
+
+### Normalised counts (boxplot)
+```{r nc_boxplot}
+
+nc = counts(dds, normalized=TRUE)
+nc.melt = melt(nc)
+
+ggplot(nc.melt, aes(x=Var2, y=value)) + geom_boxplot() + theme_classic() + theme(axis.text.x = element_text(angle = 90, colour="black", hjust = 1)) + scale_x_discrete("Sample") + scale_y_continuous("Normalised counts")
+```
+
+```{r}
+nc.threshold = 2e5
+test = apply(nc, 1, function(x){ any(x> nc.threshold) })
+ 
+as.data.frame(ensembl.genes[names(test[test])]) %>%
+  kable %>% kable_styling("striped", full_width = F) %>% scroll_box(width = "800px", height = "500px")
+```
+
+These all seem to be protein-coding genes, so we will not remove them.
+
+### Normalised counts (Transcripts per million (TPM))
+```{r tpm}
+effective_lengths = matrix(0, ncol=length(experimental_metadata$sample_id), nrow=17714)
+colnames(effective_lengths)= experimental_metadata$sample_id
+for( i in experimental_metadata$sample_id){
+  effective_lengths[,i] = read.table(paste("data/aligned/", i, ".genes.results",sep=""), sep="\t", header=TRUE)$effective_length
+}
+row.names(effective_lengths) = read.table(paste("data/aligned/", i, ".genes.results",sep=""), sep="\t", header=TRUE)$gene_id
+
+effective_lengths = rowMeans(effective_lengths[row.names(counts(dds)),])
+ncrpk = counts(dds) / (effective_lengths / 1000)
+ncrpk = apply(ncrpk, c(1,2), function(x){if(is.nan(x)){0}else{x}})
+ncrpk = apply(ncrpk, c(1,2), function(x){if(is.infinite(x)){0}else{x}})
+ncscalingfactor = colSums(ncrpk) / 1e6
+nctpm = sweep(ncrpk, 2, ncscalingfactor, "/")
+
+nctpm.melt = melt(nctpm)
+ggplot(nctpm.melt, aes(x=Var2, y=value)) + geom_boxplot() + theme_classic() + theme(axis.text.x = element_text(angle = 90, colour="black", hjust = 1)) + scale_x_discrete("Sample") + scale_y_continuous("TPM")
+```
+
+```{r}
+tpm.threshold = 20000
+test.tpm = apply(nctpm, 1, function(x){ any(x> tpm.threshold) })
+
+as.data.frame(ensembl.genes[names(test.tpm[test.tpm])]) %>%
+  kable %>% kable_styling("striped", full_width = F) %>% scroll_box(width = "800px", height = "500px")
+    
+```
+
+These all seem to be protein-coding genes, so we will not remove them.
+
+```{r}
+## If output directory doesn't exist, create it
+if(!dir.exists("analysis/output")){
+  dir.create("analysis/output")
+}
+
+if(!dir.exists("analysis/output/QC")){
+  dir.create("analysis/output/QC")
+}
+
+saveRDS(dds, "analysis/output/QC/dds_quality_control.rds")
+saveRDS(nctpm, "analysis/output/QC/tpm.rds")
+saveRDS(ensembl.genes, "analysis/output/QC/ensembl_genes.rds")
+saveRDS(dm.gtf.db, "analysis/output/QC/dm_gtf_db.rds")
+saveRDS(experimental_metadata, "analysis/output/QC/experimental_metadata.rds")
+```
+
+### Session Info
+```{r}
+sessionInfo()
+```
