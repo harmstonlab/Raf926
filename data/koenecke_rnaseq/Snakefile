@@ -1,0 +1,57 @@
+samples = ["GSM1891976_gd7_rep1","GSM1891977_gd7_rep2","GSM1891978_gd7_rep3","GSM2285334_Toll10b_rep1","GSM2285335_Toll10b_rep2","GSM2285336_Tollrm9rm10_rep1","GSM2285337_Tollrm9rm10_rep2","GSM2285338_Tollrm9rm10_rep3"]
+
+rule all:
+    input:
+        expand("fastq/{sample}_fastqc.html", sample=samples),
+        expand("{sample}.genes.results", sample=samples)
+
+rule fastqc:
+    input:
+        "/home/data/projects/raf_study/Koenecke_2016/raw_data/{sample}.fastq.gz"
+    output:
+        "fastq/{sample}_fastqc.html", ##not for shell, just for rule all
+        "fastq/{sample}_fastqc.zip"
+    shell:
+        "fastqc {input} -o fastq/"
+
+rule star:
+    input:
+        read="/home/data/projects/raf_study/Koenecke_2016/raw_data/{sample}.fastq.gz",
+        genome_dir="updatedStarIndex/"
+    output:
+        bam="star/{sample}/{sample}Aligned.toTranscriptome.out.bam"
+    log:
+        "logs/star/{sample}_star.log"
+    threads: 20
+    shell:
+        """
+        (STAR --genomeDir {input.genome_dir} \
+        --sjdbGTFfile /home/shared/genomes/dm6/StarIndex/ensembl97/Drosophila_melanogaster.BDGP6.22.97.chr.gtf \
+        --readFilesIn {input.read} \
+        --runThreadN {threads} \
+        --twopassMode Basic \
+        --outWigType bedGraph \
+        --outSAMtype BAM SortedByCoordinate \
+        --quantMode TranscriptomeSAM \
+        --readFilesCommand zcat \
+        --runDirPerm All_RWX \
+        --outFileNamePrefix star/{wildcards.sample}/{wildcards.sample}) &> {log}
+        """
+
+rule rsem:
+    input:
+        reads="star/{sample}/{sample}Aligned.toTranscriptome.out.bam",
+    output:
+        "{sample}.genes.results"
+    threads: 20
+    log:
+        "logs/rsem/{sample}_rsem.log"
+    shell:
+        """
+        (rsem-calculate-expression --alignments \
+        --no-bam-output \
+        -p {threads} \
+        {input.reads} \
+        rsem_reference/dm6_ensembl97 \
+        {wildcards.sample}) &> {log}
+        """
