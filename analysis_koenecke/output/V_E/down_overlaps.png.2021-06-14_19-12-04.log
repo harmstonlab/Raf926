@@ -1,0 +1,22 @@
+INFO [2021-06-14 19:12:04] $x
+INFO [2021-06-14 19:12:04] list(Down_LOF = na.omit(lof_ue$external_gene_name), Koenecke_Mesoderm = na.omit(mesoderm_genes$gene_name), 
+INFO [2021-06-14 19:12:04]     Koenecke_Ectoderm = na.omit(ectoderm_genes$gene_name), Koenecke_Neuroectoderm = na.omit(neuroectoderm_genes$gene_name))
+INFO [2021-06-14 19:12:04] 
+INFO [2021-06-14 19:12:04] $fill
+INFO [2021-06-14 19:12:04] c("#ffc93c", "#f8a488", "#9ddfd3", "#31326f")
+INFO [2021-06-14 19:12:04] 
+INFO [2021-06-14 19:12:04] $margin
+INFO [2021-06-14 19:12:04] [1] 0.08
+INFO [2021-06-14 19:12:04] 
+INFO [2021-06-14 19:12:04] $alpha
+INFO [2021-06-14 19:12:04] c(0.7, 0.7, 0.7, 0.7)
+INFO [2021-06-14 19:12:04] 
+INFO [2021-06-14 19:12:04] $imagetype
+INFO [2021-06-14 19:12:04] [1] "png"
+INFO [2021-06-14 19:12:04] 
+INFO [2021-06-14 19:12:04] $print.mode
+INFO [2021-06-14 19:12:04] [1] "percent"
+INFO [2021-06-14 19:12:04] 
+INFO [2021-06-14 19:12:04] $filename
+INFO [2021-06-14 19:12:04] [1] "analysis_koenecke/output/V_E/down_overlaps.png"
+INFO [2021-06-14 19:12:04] 

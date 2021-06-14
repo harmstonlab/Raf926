@@ -1,0 +1,9 @@
+sample_id,germ_layer,replicate
+GSM1891976_gd7_rep1,Ectoderm,"1"
+GSM1891977_gd7_rep2,Ectoderm,"2"
+GSM1891978_gd7_rep3,Ectoderm,"3"
+GSM2285336_Tollrm9rm10_rep1,Neuroectoderm,"1"
+GSM2285337_Tollrm9rm10_rep2,Neuroectoderm,"2"
+GSM2285338_Tollrm9rm10_rep3,Neuroectoderm,"3"
+GSM2285334_Toll10b_rep1,Mesoderm,"1"
+GSM2285335_Toll10b_rep2,Mesoderm,"2"

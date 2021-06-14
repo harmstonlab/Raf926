@@ -1,0 +1,632 @@
+---
+title: "RNA-Seq Analysis of Koenecke et al. Dataset"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+short=TRUE #if short==TRUE, do not echo code chunks
+debug=FALSE
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='figures/vis_enrichments/',
+                      echo=!short, warning=debug, message=debug, dev=c("png", "pdf"))
+```
+
+```{r load libraries, include=FALSE}
+source("analysis_koenecke/functions.R")
+library(DESeq2)
+library(knitr)
+library(GenomicFeatures)
+library(RColorBrewer)
+library(grid)
+library(gridExtra)
+library(lattice)
+library(reshape)
+library(geneplotter)
+library(pheatmap)
+library(Biostrings)
+library(BSgenome.Dmelanogaster.UCSC.dm6)
+library(clusterProfiler)
+library(ReactomePA)
+library(enrichplot)
+library(stringr)
+library(cluster)
+library(factoextra)
+library(tidyverse)
+library(DT)
+library(data.table)
+library(ggpubr)
+library(cowplot)
+library(msigdbr)
+options(connectionObserver = NULL)
+#BiocManager::install("org.Dm.eg.db", character.only = TRUE)
+library("org.Dm.eg.db", character.only = TRUE)
+library(VennDiagram)
+library(enrichR)
+library(UpSetR)
+library(png)
+```
+
+```{r loading in data, include=FALSE}
+## Outputs required from QC.Rmd
+experimental_metadata <- readRDS("analysis_koenecke/output/QC/experimental_metadata.rds")
+ensembl_genes <- readRDS("analysis_koenecke/output/QC/ensembl_genes.rds")
+tpm <- readRDS("analysis_koenecke/output/QC/tpm.rds")
+
+## Outputs required from DE.Rmd
+significant_rld <- readRDS("analysis_koenecke/output/DE/significant_rld.rds")
+dds <- readRDS("analysis_koenecke/output/DE/dds_de.rds")
+wald_sig <- readRDS("analysis_koenecke/output/DE/sig_results.rds")
+wald_all <- readRDS("analysis_koenecke/output/DE/all_results.rds")
+
+## Global variables
+nc <- counts(dds, normalized = TRUE)
+dds_counts = counts(dds)
+lfc.threshold = log2(1.5)
+lof_oe <- readRDS("analysis/output/V_E/oe.rds")
+lof_ue <- readRDS("analysis/output/V_E/ue.rds")
+lof_results <- readRDS("analysis/output/DE/wald_all_results.rds")
+sig_lof_results <- lof_results[na.omit(lof_results$padj) < 0.1,]
+sig_oe <- sig_lof_results[sig_lof_results$log2FoldChange > 0,]
+sig_ue <- sig_lof_results[sig_lof_results$log2FoldChange < 0,]
+
+## If the directory doesn't exist, create it
+if(!dir.exists("analysis_koenecke/output/V_E")){
+  dir.create("analysis_koenecke/output/V_E")
+}
+```
+
+```{r z-score transformation}
+# assay(x) to access the count data
+sig_mat_rld = assay(significant_rld)
+
+# The apply function swaps the rows to samples and columns to genes -- the standard is the other way around: samples in cols and genes in rows, hence the transpose function
+zscores = t(apply(sig_mat_rld, 1, function(x){ (x - mean(x)) / sd(x) }))
+```
+
+```{r heatmap annotation}
+## >> !! NOTE !! The annotation needs to be in the correct order as the condition in the metadata.txt
+annotation = data.frame(Germ_Layer = rep(c("Ectoderm","Neuroectoderm", "Mesoderm"),
+                                            c(3, 3, 2)))
+
+row.names(annotation) = experimental_metadata$sample_id 
+anno_colours = list( Germ_Layer = c(Ectoderm = "#45526c", Neuroectoderm = "#d2e69c", Mesoderm = "#5aa897"))
+```
+
+## Elbow Plot for Clustering
+```{r elbow}
+foo = as(zscores, "matrix")
+bar = sapply(1:10, function(x){kmeans(foo, centers=x)$tot.withinss})
+plot(bar, type="l")
+```
+
+## Heatmap
+```{r heatmap}
+clust <- generate_data(zscores,3)
+clust <- as.data.frame(clust)
+clust$Cluster <- factor(clust$Cluster, levels = c(2,3,1))
+clust <- clust[order(clust$Cluster),]
+
+anno_row <- clust %>%
+  dplyr::select(Cluster) %>%
+  mutate(Germ_Layer = ifelse(Cluster == 2, "Ectoderm",
+                             ifelse(Cluster == 3, "Neuroectoderm", "Mesoderm"))) %>%
+  dplyr::select(-Cluster) %>%
+  arrange(Germ_Layer)
+
+
+pheatmap(clust[,1:(ncol(clust)-1)],
+           color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+           fontsize_row = 5.5,
+           annotation_col = annotation,
+           annotation_row = anno_row,
+           annotation_colors = anno_colours,
+           cluster_rows = FALSE,
+           cluster_cols = FALSE)
+```
+
+## Number of Genes
+
+```{r extracting genes}
+clust_df <- as.data.frame(clust)
+clust_df$gene_name <- ensembl_genes[rownames(clust_df),]$external_gene_name
+
+ectoderm_genes <- clust_df[clust_df$Cluster == 2, ] %>%
+  dplyr::select(-Cluster)
+
+neuroectoderm_genes <- clust_df[clust_df$Cluster == 3, ] %>%
+  dplyr::select(-Cluster)
+
+mesoderm_genes <- clust_df[clust_df$Cluster == 1, ] %>%
+  dplyr::select(-Cluster)
+
+data.frame(Cluster = c("Ectoderm", "Neuroectoderm", "Mesoderm"),
+                        Number_of_genes = c(nrow(ectoderm_genes), nrow(neuroectoderm_genes), nrow(mesoderm_genes)))
+```
+
+## Cluster Enrichments
+```{r}
+#listEnrichrSites()
+setEnrichrSite("FlyEnrichr")
+dbs <- listEnrichrDbs()
+to_check <- c("KEGG_2019", "GO_Biological_Process_2018")
+```
+
+### Ectoderm Cluster {.tabset}
+```{r}
+ecto_gene_names = ectoderm_genes$gene_name
+eresList <- enrichr(ecto_gene_names, databases = to_check)
+```
+
+#### GO_Biological_Process_2018
+```{r ectoderm_go}
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$GO_Biological_Process_2018 %>%
+  write.csv("analysis_koenecke/output/V_E/ectoderm_go.csv", row.names = TRUE, col.names = TRUE)
+```
+
+#### KEGG_2019
+```{r ectoderm_kegg}
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$KEGG_2019 %>%
+  write.csv("analysis_koenecke/output/V_E/ectoderm_kegg.csv", row.names = TRUE, col.names = TRUE)
+```
+
+### Neuroectoderm Cluster {.tabset}
+```{r}
+neuroecto_gene_names = neuroectoderm_genes$gene_name
+eresList <- enrichr(neuroecto_gene_names, databases = to_check)
+```
+
+#### GO_Biological_Process_2018
+```{r neuroectoderm_go}
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$GO_Biological_Process_2018 %>%
+  write.csv("analysis_koenecke/output/V_E/neuroectoderm_go.csv", row.names = TRUE, col.names = TRUE)
+```
+
+#### KEGG_2019
+```{r neuroectoderm_kegg}
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$KEGG_2019 %>%
+  write.csv("analysis_koenecke/output/V_E/neuroectoderm_kegg.csv", row.names = TRUE, col.names = TRUE)
+```
+
+### Mesoderm Cluster {.tabset}
+```{r}
+meso_gene_names = mesoderm_genes$gene_name
+eresList <- enrichr(meso_gene_names, databases = to_check)
+```
+
+#### GO_Biological_Process_2018
+```{r meosderm_go}
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$GO_Biological_Process_2018 %>%
+  write.csv("analysis_koenecke/output/V_E/mesoderm_go.csv", row.names = TRUE, col.names = TRUE)
+```
+
+#### KEGG_2019
+```{r mesoderm_kegg}
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+eresList$KEGG_2019 %>%
+  write.csv("analysis_koenecke/output/V_E/mesoderm_kegg.csv", row.names = TRUE, col.names = TRUE)
+```
+
+## Overlap between targets downregulated in WT vs. LOF and all clusters {.tabset}
+### Venn Diagram
+```{r down_venn}
+venn = venn.diagram(x=list(Down_LOF = na.omit(lof_ue$external_gene_name), Koenecke_Mesoderm = na.omit(mesoderm_genes$gene_name),
+                           Koenecke_Ectoderm = na.omit(ectoderm_genes$gene_name),
+                           Koenecke_Neuroectoderm = na.omit(neuroectoderm_genes$gene_name)), fill = c("#ffc93c", "#f8a488", "#9ddfd3", "#31326f"), margin = 0.08, alpha = c(0.7, 0.7, 0.7, 0.7), imagetype = "png", print.mode = "percent", filename = "analysis_koenecke/output/V_E/down_overlaps.png")
+```
+
+```{r}
+down_olaps <- readPNG("analysis_koenecke/output/V_E/down_overlaps.png")
+p <- rasterGrob(down_olaps, interpolate = TRUE)
+ggarrange(p)
+```
+
+### Upset Plot
+```{r down_upset}
+listInput <- list(Down_LOF = na.omit(lof_ue$external_gene_name), 
+                  Koenecke_Mesoderm = na.omit(mesoderm_genes$gene_name),
+                  Koenecke_Neuroectoderm = na.omit(neuroectoderm_genes$gene_name),
+                  Koenecke_Ectoderm = na.omit(ectoderm_genes$gene_name))
+
+upset(fromList(listInput),
+      order.by = "freq", 
+      sets = c("Down_LOF", "Koenecke_Mesoderm", "Koenecke_Neuroectoderm", "Koenecke_Ectoderm"),
+      keep.order = T,
+      decreasing = F, 
+      mb.ratio = c(0.6, 0.4),
+      number.angles = 0, 
+      text.scale = 1.1, 
+      point.size = 2.8, 
+      line.size = 1)
+```
+
+### Resampling {.tabset}
+#### Mesoderm
+```{r meso_hist}
+n = 50000
+res <- rep(NA, n) 
+genesToDraw <- 3018 # how many to select 
+genesToDraw2 <- 1763
+
+for(i in 1:length(res)){
+
+drawA <- sample(x=na.omit(lof_results$external_gene_name), size=genesToDraw, replace=FALSE)
+drawB <- sample(x=na.omit(wald_all$external_gene_name), size=genesToDraw2, replace=FALSE)
+
+res[i] <- length(intersect(drawA, drawB))
+}
+
+res_df <- as.data.frame(res)
+ggplot(res_df, aes(x=res)) + geom_histogram(color="black", fill="grey", bins = 100) + geom_vline(aes(xintercept=739),color="red", linetype="dashed", size=1) + xlab("Number of overlaps")
+```
+
+```{r echo=TRUE}
+n
+sum(res > 739)/n
+```
+
+#### Neuroectoderm
+```{r}
+n = 50000
+res <- rep(NA, n) 
+genesToDraw <- 3018 # how many to select 
+genesToDraw2 <- 649
+
+for(i in 1:length(res)){
+
+drawA <- sample(x=na.omit(lof_results$external_gene_name), size=genesToDraw, replace=FALSE)
+drawB <- sample(x=na.omit(wald_all$external_gene_name), size=genesToDraw2, replace=FALSE)
+
+res[i] <- length(intersect(drawA, drawB))
+}
+
+res_df <- as.data.frame(res)
+ggplot(res_df, aes(x=res)) + geom_histogram(color="black", fill="grey", bins = 100) + geom_vline(aes(xintercept=292),color="red", linetype="dashed", size=1) + xlab("Number of overlaps")
+```
+
+```{r, echo=TRUE}
+n
+sum(res > 292)/n
+```
+
+
+#### Ectoderm
+```{r}
+n = 50000
+res <- rep(NA, n) 
+genesToDraw <- 3018 # how many to select 
+genesToDraw2 <- 1741
+
+for(i in 1:length(res)){
+
+drawA <- sample(x=na.omit(lof_results$external_gene_name), size=genesToDraw, replace=FALSE)
+drawB <- sample(x=na.omit(wald_all$external_gene_name), size=genesToDraw2, replace=FALSE)
+
+res[i] <- length(intersect(drawA, drawB))
+}
+
+res_df <- as.data.frame(res)
+ggplot(res_df, aes(x=res)) + geom_histogram(color="black", fill="grey", bins = 100) + geom_vline(aes(xintercept=161),color="red", linetype="dashed", size=1) + xlab("Number of overlaps")
+```
+
+```{r, echo=TRUE}
+n
+sum(res > 161)/n
+```
+
+## Overlap Enrichments {.tabset}
+### Downregulated & Neuroectoderm Overlap
+```{r down_neuro}
+down_neuroecto_overlap <- intersect(lof_ue$external_gene_name, neuroectoderm_genes$gene_name)
+eresList <- enrichr(down_neuroecto_overlap, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+### Downregulated & Mesoderm Overlap
+```{r down_meso}
+down_meso_overlap <- intersect(lof_ue$external_gene_name, mesoderm_genes$gene_name)
+eresList <- enrichr(down_meso_overlap, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+
+```{r down_ecto}
+down_ecto_overlap <- intersect(lof_ue$external_gene_name, ectoderm_genes$gene_name)
+# eresList <- enrichr(down_ecto_overlap, databases = to_check)
+# 
+# eresList$GO_Biological_Process_2018 %>%
+#   plot_enrichr(type="GO_BP")
+# datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+# 
+# eresList$KEGG_2019 %>%
+#   plot_enrichr(type="KEGG")
+# datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+### Mesoderm only
+```{r meso_only_enrichments}
+meso_only <- mesoderm_genes$gene_name[!mesoderm_genes$gene_name %in% down_meso_overlap]
+eresList <- enrichr(meso_only, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+### Neuroectoderm only
+```{r neuro_only_enrichments}
+neuroecto_only <- neuroectoderm_genes$gene_name[!neuroectoderm_genes$gene_name %in% down_neuroecto_overlap]
+eresList <- enrichr(neuroecto_only, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+### Downregulated only
+```{r down_only_enrichments}
+down_only <- lof_ue[!lof_ue$external_gene_name %in% down_ecto_overlap,]
+down_only <- down_only[!down_only$external_gene_name %in% down_meso_overlap,]
+down_only <- down_only[!down_only$external_gene_name %in% down_neuroecto_overlap,]
+down_only <- down_only$external_gene_name
+
+eresList <- enrichr(down_only, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+## Overlap between targets UPREGULATED in WT vs. LOF and all clusters {.tabset}
+### Venn Diagram
+```{r up_venn}
+venn = venn.diagram(x=list(Up_LOF = na.omit(lof_oe$external_gene_name), Koenecke_Mesoderm = na.omit(mesoderm_genes$gene_name),
+                           Koenecke_Ectoderm = na.omit(ectoderm_genes$gene_name),
+                           Koenecke_Neuroectoderm = na.omit(neuroectoderm_genes$gene_name)), fill = c("#ffc93c", "#f8a488", "#9ddfd3", "#31326f"), margin = 0.08, alpha = c(0.7, 0.7, 0.7, 0.7), imagetype = "png", print.mode = "percent", filename = "analysis_koenecke/output/V_E/up_overlaps.png")
+```
+
+```{r}
+up_olaps <- readPNG("analysis_koenecke/output/V_E/up_overlaps.png")
+p <- rasterGrob(up_olaps, interpolate = TRUE)
+ggarrange(p)
+```
+
+### Upset Plot
+```{r up_upset}
+listInput <- list(Up_LOF = na.omit(lof_oe$external_gene_name), 
+                  Koenecke_Mesoderm = na.omit(mesoderm_genes$gene_name),
+                  Koenecke_Neuroectoderm = na.omit(neuroectoderm_genes$gene_name),
+                  Koenecke_Ectoderm = na.omit(ectoderm_genes$gene_name))
+
+upset(fromList(listInput),
+      order.by = "freq", 
+      sets = c("Up_LOF", "Koenecke_Mesoderm", "Koenecke_Neuroectoderm", "Koenecke_Ectoderm"),
+      keep.order = T,
+      decreasing = F, 
+      mb.ratio = c(0.6, 0.4),
+      number.angles = 0, 
+      text.scale = 1.1, 
+      point.size = 2.8, 
+      line.size = 1)
+
+```
+
+### Resampling {.tabset}
+
+#### Mesoderm
+```{r}
+n = 50000
+res <- rep(NA, n) 
+genesToDraw <- 2593 # how many to select 
+genesToDraw2 <- 1763
+
+for(i in 1:length(res)){
+
+drawA <- sample(x=na.omit(lof_results$external_gene_name), size=genesToDraw, replace=FALSE)
+drawB <- sample(x=na.omit(wald_all$external_gene_name), size=genesToDraw2, replace=FALSE)
+
+res[i] <- length(intersect(drawA, drawB))
+}
+
+res_df <- as.data.frame(res)
+ggplot(res_df, aes(x=res)) + geom_histogram(color="black", fill="grey", bins = 100) + geom_vline(aes(xintercept=223),color="red", linetype="dashed", size=1) + xlab("Number of overlaps")
+```
+```{r echo=TRUE}
+n
+sum(res > 223)/n
+```
+
+
+#### Neuroectoderm
+```{r}
+n = 50000
+res <- rep(NA, n) 
+genesToDraw <- 2593 # how many to select 
+genesToDraw2 <- 649
+
+for(i in 1:length(res)){
+
+drawA <- sample(x=na.omit(lof_results$external_gene_name), size=genesToDraw, replace=FALSE)
+drawB <- sample(x=na.omit(wald_all$external_gene_name), size=genesToDraw2, replace=FALSE)
+
+res[i] <- length(intersect(drawA, drawB))
+}
+
+res_df <- as.data.frame(res)
+ggplot(res_df, aes(x=res)) + geom_histogram(color="black", fill="grey", bins = 50) + geom_vline(aes(xintercept=109),color="red", linetype="dashed", size=1) + xlab("Number of overlaps")
+```
+```{r echo=TRUE}
+n
+sum(res > 109)/n
+```
+
+
+#### Ectoderm
+```{r}
+n = 50000
+res <- rep(NA, n) 
+genesToDraw <- 2593 # how many to select 
+genesToDraw2 <- 1741
+
+for(i in 1:length(res)){
+
+drawA <- sample(x=na.omit(lof_results$external_gene_name), size=genesToDraw, replace=FALSE)
+drawB <- sample(x=na.omit(wald_all$external_gene_name), size=genesToDraw2, replace=FALSE)
+
+res[i] <- length(intersect(drawA, drawB))
+}
+
+res_df <- as.data.frame(res)
+ggplot(res_df, aes(x=res)) + geom_histogram(color="black", fill="grey", bins = 100) + geom_vline(aes(xintercept=629),color="red", linetype="dashed", size=1) + xlab("Number of overlaps")
+```
+
+```{r echo=TRUE}
+n
+sum(res > 629)/n
+```
+
+## Overlap Enrichments {.tabset}
+### Upregulated & Ectoderm Overlap
+```{r up_ecto}
+up_ecto_overlap <- intersect(lof_oe$external_gene_name, ectoderm_genes$gene_name)
+eresList <- enrichr(up_ecto_overlap, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+
+```{r up_neuroecto}
+up_neuroecto_overlap <- intersect(lof_oe$external_gene_name, neuroectoderm_genes$gene_name)
+# eresList <- enrichr(up_neuroecto_overlap, databases = to_check)
+# 
+# eresList$GO_Biological_Process_2018 %>%
+#   plot_enrichr(type="GO_BP")
+# datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+# 
+# eresList$KEGG_2019 %>%
+#   plot_enrichr(type="KEGG")
+# datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+```{r up_meso}
+up_meso_overlap <- intersect(lof_oe$external_gene_name, mesoderm_genes$gene_name)
+# eresList <- enrichr(up_meso_overlap, databases = to_check)
+# 
+# eresList$GO_Biological_Process_2018 %>%
+#   plot_enrichr(type="GO_BP")
+# datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+# 
+# eresList$KEGG_2019 %>%
+#   plot_enrichr(type="KEGG")
+# datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+### Ectoderm only
+```{r ecto_only}
+ecto_only <- ectoderm_genes$gene_name[!ectoderm_genes$gene_name %in% up_ecto_overlap]
+eresList <- enrichr(ecto_only, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+### Upregulated only
+```{r up_only}
+up_only <- lof_oe[!lof_oe$external_gene_name %in% up_ecto_overlap,]
+up_only <- up_only[!up_only$external_gene_name %in% up_meso_overlap,]
+up_only <- up_only[!up_only$external_gene_name %in% up_neuroecto_overlap,]
+up_only <- up_only$external_gene_name
+
+eresList <- enrichr(up_only, databases = to_check)
+
+eresList$GO_Biological_Process_2018 %>%
+  plot_enrichr("GO_Biological_Process_2018")
+datatable(eresList[[2]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+
+eresList$KEGG_2019 %>%
+  plot_enrichr("KEGG_2019") 
+datatable(eresList[[1]], options = list(scrollX = TRUE), class = "white-space: nowrap")
+```
+
+## Combined Upset Plot
+```{r combined_upset}
+listInput <- list(Down_LOF = na.omit(lof_ue$external_gene_name), 
+                  Up_LOF = na.omit(lof_oe$external_gene_name),
+                  Koenecke_Mesoderm = na.omit(mesoderm_genes$gene_name),
+                  Koenecke_Neuroectoderm = na.omit(neuroectoderm_genes$gene_name),
+                  Koenecke_Ectoderm = na.omit(ectoderm_genes$gene_name))
+
+upset(fromList(listInput),
+      order.by = "freq", 
+      sets = c("Down_LOF", "Up_LOF", "Koenecke_Mesoderm", "Koenecke_Neuroectoderm", "Koenecke_Ectoderm"),
+      keep.order = T,
+      decreasing = F, 
+      mb.ratio = c(0.6, 0.4),
+      number.angles = 0, 
+      text.scale = 1.1, 
+      point.size = 2.8, 
+      line.size = 1,
+      set_size.show = T)
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

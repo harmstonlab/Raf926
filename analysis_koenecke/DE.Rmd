@@ -1,0 +1,180 @@
+---
+title: "Differential Expression"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+short=TRUE #if short==TRUE, do not echo code chunks
+debug=FALSE
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='figures/differentialexpression/',
+                      echo=!short, warning=debug, message=debug, dev=c("png", "pdf"))
+```
+
+```{r}
+source("analysis_koenecke/functions.R")
+library(DESeq2)
+library(knitr)
+library(GenomicFeatures)
+library(RColorBrewer)
+library(gplots)
+library(biomaRt)
+library(grid)
+library(gridExtra)
+library(ggplot2)
+library(lattice)
+library(reshape)
+library(geneplotter)
+library(limma)
+library(dplyr)
+library(EnhancedVolcano)
+```
+
+```{r load data}
+dds = readRDS("analysis_koenecke/output/QC/dds_quality_control.rds")
+ensembl.genes= readRDS("analysis_koenecke/output/QC/ensembl_genes.rds")
+lfc.threshold = log2(1.5)
+
+## Creating the dir
+## If the directory doesn't exist, create it
+if(!dir.exists("analysis_koenecke/output/DE")){
+  dir.create("analysis_koenecke/output/DE")
+}
+
+output_dir <- "analysis_koenecke/output/DE/"
+
+# Removing lowly expressed genes, only to be done once at the start of the differential expression step
+filter = apply(counts(dds, normalized=TRUE), 1, function(x){ mean(x) >= 10 })
+dds = dds[filter, ]
+```
+
+## Wald Tests
+### Ectoderm (gd7) vs Mesoderm (Toll10b)
+```{r}
+dds_ecto_meso = nbinomWaldTest(dds)
+
+results_ecto_meso = results(dds_ecto_meso, contrast = c("germ_layer", "Ectoderm", "Mesoderm"),  filter=rowMeans(counts(dds_ecto_meso, normalized=TRUE)), test="Wald", alpha=0.1, independentFiltering=TRUE)
+
+results_ecto_meso$gene_biotype = ensembl.genes$gene_biotype[match(row.names(results_ecto_meso), ensembl.genes$gene_id)]
+results_ecto_meso$external_gene_name = ensembl.genes$external_gene_name[match(row.names(results_ecto_meso), ensembl.genes$gene_id)]
+results_ecto_meso$entrezgene_id = ensembl.genes$entrezgene_id[match(row.names(results_ecto_meso), ensembl.genes$gene_id)]
+
+hist(results_ecto_meso$pvalue, xlab = "p-value", ylab = "Frequency")
+```
+**Number of significant genes (padj < 0.1 & log2FoldChange < log2(1.5)):**
+```{r}
+sum(results_ecto_meso$padj < 0.1 & abs(results_ecto_meso$log2FoldChange) > lfc.threshold, na.rm = T)
+```
+
+```{r}
+### Writing out .csv files
+write_files(results_ecto_meso, "ecto", "meso")
+
+### Volcano plot
+generate_volcano(results_ecto_meso,"Ectoderm (gd7)","Mesoderm (Toll10b)")
+
+### MA plot
+generate_ma(results_ecto_meso)
+```
+
+### Neuroectoderm (Tollrm9rm10) vs Mesoderm (Toll10b)
+```{r}
+dds_neuroecto_meso = nbinomWaldTest(dds)
+
+results_neuroecto_meso = results(dds_neuroecto_meso, contrast = c("germ_layer", "Neuroectoderm", "Mesoderm"),  filter=rowMeans(counts(dds_neuroecto_meso, normalized=TRUE)), test="Wald", alpha=0.1, independentFiltering=TRUE)
+
+results_neuroecto_meso$gene_biotype = ensembl.genes$gene_biotype[match(row.names(results_neuroecto_meso), ensembl.genes$gene_id)]
+results_neuroecto_meso$external_gene_name = ensembl.genes$external_gene_name[match(row.names(results_neuroecto_meso), ensembl.genes$gene_id)]
+results_neuroecto_meso$entrezgene_id = ensembl.genes$entrezgene_id[match(row.names(results_neuroecto_meso), ensembl.genes$gene_id)]
+
+hist(results_neuroecto_meso$pvalue, xlab = "p-value", ylab = "Frequency")
+```
+**Number of significant genes (padj < 0.1 & log2FoldChange < log2(1.5)):**
+```{r}
+sum(results_neuroecto_meso$padj < 0.1 & abs(results_neuroecto_meso$log2FoldChange) > lfc.threshold, na.rm = T)
+```
+
+```{r}
+### Writing out .csv files
+write_files(results_neuroecto_meso, "neuroecto", "meso")
+
+### Volcano plot
+generate_volcano(results_neuroecto_meso,"Neuroneuroectoderm (Tollrm9rm10)","Mesoderm (Toll10b)")
+
+### MA plot
+generate_ma(results_neuroecto_meso)
+```
+
+### Neuroectoderm (Tollrm9rm10) vs Ectoderm (gd7)
+```{r}
+dds_neuroecto_ecto = nbinomWaldTest(dds)
+
+results_neuroecto_ecto = results(dds_neuroecto_ecto, contrast = c("germ_layer", "Neuroectoderm", "Ectoderm"),  filter=rowMeans(counts(dds_neuroecto_ecto, normalized=TRUE)), test="Wald", alpha=0.1, independentFiltering=TRUE)
+
+results_neuroecto_ecto$gene_biotype = ensembl.genes$gene_biotype[match(row.names(results_neuroecto_ecto), ensembl.genes$gene_id)]
+results_neuroecto_ecto$external_gene_name = ensembl.genes$external_gene_name[match(row.names(results_neuroecto_ecto), ensembl.genes$gene_id)]
+results_neuroecto_ecto$entrezgene_id = ensembl.genes$entrezgene_id[match(row.names(results_neuroecto_ecto), ensembl.genes$gene_id)]
+
+hist(results_neuroecto_ecto$pvalue, xlab = "p-value", ylab = "Frequency")
+```
+**Number of significant genes (padj < 0.1 & log2FoldChange < log2(1.5)):**
+```{r}
+sum(results_neuroecto_ecto$padj < 0.1 & abs(results_neuroecto_ecto$log2FoldChange) > lfc.threshold, na.rm = T)
+```
+
+```{r}
+### Writing out .csv files
+write_files(results_neuroecto_ecto, "neuroecto", "ecto")
+
+### Volcano plot
+generate_volcano(results_neuroecto_ecto,"Neuroneuroectoderm (Tollrm9rm10)","Ectoderm (gd7)")
+
+### MA plot
+generate_ma(results_neuroecto_ecto)
+```
+
+## Likelihood Ratio Test
+```{r}
+dds_LRT = nbinomLRT(dds, reduced = ~1)
+results_LRT = results(dds_LRT)
+
+results_LRT$gene_biotype = ensembl.genes$gene_biotype[match(row.names(results_LRT), ensembl.genes$gene_id)]
+results_LRT$external_gene_name = ensembl.genes$external_gene_name[match(row.names(results_LRT), ensembl.genes$gene_id)]
+results_LRT$entrezgene_id = ensembl.genes$entrezgene_id[match(row.names(results_LRT), ensembl.genes$gene_id)]
+
+hist(results_LRT$pvalue)
+```
+**Number of significant genes (padj < 0.1):**
+```{r}
+sum(results_LRT$padj < 0.1, na.rm=T)
+```
+
+```{r}
+## Get significant genes by 10% FDR 
+sig_padj_genes <- results_LRT[!is.na(results_LRT$padj),]
+sig_padj_genes <- sig_padj_genes[sig_padj_genes$padj < 0.1,]
+
+## Get the rld for all differentially expressed genes & rld for significant genes
+rld <- rlog(dds_LRT)
+significant_rld <- rld[rownames(sig_padj_genes)]
+```
+
+```{r save data}
+## This writes out csv file of significant DE genes by both FDR 10%
+write.csv(as.data.frame(results_LRT), "analysis_koenecke/output/DE/all_de_genes.csv", sep="\t", quote=FALSE, row.names=TRUE)
+write.csv(sig_padj_genes, "analysis_koenecke/output/DE/significant_de_genes.csv", row.names = TRUE, col.names = TRUE)
+
+## Saving RDS files
+saveRDS(dds_LRT, "analysis_koenecke/output/DE/dds_de.rds")
+saveRDS(significant_rld, "analysis_koenecke/output/DE/significant_rld.rds")
+saveRDS(results_LRT, "analysis_koenecke/output/DE/all_results.rds")
+saveRDS(sig_padj_genes, "analysis_koenecke/output/DE/sig_results.rds")
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```
