@@ -17,7 +17,7 @@ The same folder structure applies to the subanalyses.
 
 ### Subanalysis
 #### Comparing dorsal targets to Koenecke et al's dataset
-Here we looked at the RNA-seq data from [Koenecke et al.](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-016-1057-2). The processed data can be found in `data/koenecke_rnaseq`. The data was aligned using STAR and RSEM (see Versions/Koenecke Analysis for versions) via a Snakefile, which can be found in the `analysis_koenecke` folder. Again, the same three scripts were used, and in the same order -- `QC.Rmd`, `DE.Rmd`, and `V_E.Rmd`.
+Here we looked at the RNA-seq data from [Koenecke et al.](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-016-1057-2). The processed data can be found in `data/koenecke_rnaseq`. The data was aligned using STAR and RSEM (see Versions/Koenecke Analysis for versions) via a Snakefile, which can be found in the `data/koenecke_rnaseq` folder. Again, the same three scripts were used, and in the same order -- `QC.Rmd`, `DE.Rmd`, and `V_E.Rmd`.
 
 ## Versions
 ### Shell
