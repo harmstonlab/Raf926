@@ -135,6 +135,30 @@ data.frame(Cluster = c("Upregulated_MUT", "Downregulated_MUT", "Total"),
                                             (nrow(oe)+nrow(ue))))
 ```
 
+## Raf
+```{r}
+nc_df = as.data.frame(nc)
+nc_df$gene_names = ensembl_genes$external_gene_name[match(rownames(nc_df), ensembl_genes$gene_id)]
+
+
+nc_df["FBgn0003079",] %>%
+    melt() %>%
+    select(variable,value) %>%
+    `colnames<-`(c("Sample", "Value")) %>%
+    mutate(Condition = ifelse(grepl("WT", Sample), "WT", "LOF_Mutant")) %>%
+    ggplot(aes(x=Condition, y=Value, fill = Condition)) + 
+    geom_boxplot() + 
+    theme_classic() + 
+    theme(axis.text.x = element_blank(), legend.position="none") +
+    labs(title = "Raf") + 
+    xlab(NULL) + 
+    ylab(NULL) +
+    scale_x_discrete(limits = rev) +
+    expand_limits(y=0) +
+    scale_y_continuous(limits = c(1000, 3000), breaks = seq(1000,3000,by = (3000-1000)/5))
+
+```
+
 ## Volcano Plot of Significant Genes
 ```{r}
 make_volcano_with_labels(wald_sig, "", "Volcano Plot: S926glc(Mutant_LOF) vs. WT")
