@@ -1,0 +1,148 @@
+---
+title: "rafenrichment"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Code to generate plots display GO and KEGG enrichments for raf926 vs WT 
+
+```{r}
+library(ggplot2)
+library(scales)
+library(stringr)
+```
+
+```{r}
+downregulated = read.delim("analysis/output/V_E/downregulated_go.csv", sep=",")
+downregulated = downregulated[order(downregulated$Adjusted.P.value),]
+
+upregulated = read.delim("analysis/output/V_E/upregulated_go.csv", sep=",")
+upregulated = upregulated[order(upregulated$Adjusted.P.value),]
+
+downregulated_kegg = read.delim("analysis/output/V_E/downregulated_kegg.csv", sep=",")
+downregulated_kegg = downregulated_kegg[order(downregulated_kegg$Adjusted.P.value),]
+
+upregulated_kegg = read.delim("analysis/output/V_E/upregulated_kegg.csv", sep=",")
+upregulated_kegg = upregulated_kegg[order(upregulated_kegg$Adjusted.P.value),]
+
+
+gobpterms_of_interest = c("embryonic epithelial tube formation (GO:0001838)", 
+                          "epithelial cell morphogenesis (GO:0003382)", 
+                          "regulation of MAPK cascade (GO:0043408)", 
+                          "dorsal closure (GO:0007391)",   
+                          "dorsal/ventral axis specification (GO:0009950)", 
+                          "mesoderm development (GO:0007498)", 
+                          "nervous system development (GO:0007399)",
+                          "Toll signaling pathway (GO:0008063)", 
+                          "midgut development (GO:0007494)", 
+                          "heart development (GO:0007507)", 
+                          "regulation of cell fate specification (GO:0042659)")
+
+foo = upregulated[upregulated$Term %in% gobpterms_of_interest, ]
+foo$cls = "upregulated"
+spam = downregulated[downregulated$Term %in% gobpterms_of_interest, ]
+spam$cls = "downregulated"
+
+results = rbind(foo, spam)
+
+results$N = sapply(str_split(results$Overlap, "/"), function(x){as.numeric(x[1])})
+results$D = sapply(str_split(results$Overlap, "/"), function(x){as.numeric(x[2])})
+results$generatio = results$N / results$D
+
+results$cls = factor(results$cls, c("upregulated", "downregulated"))
+results$Term = factor(results$Term, rev(c("dorsal/ventral axis specification (GO:0009950)", 
+                        "dorsal closure (GO:0007391)", 
+                        "embryonic epithelial tube formation (GO:0001838)", 
+                        "epithelial cell morphogenesis (GO:0003382)",
+                        "Toll signaling pathway (GO:0008063)", 
+                        "regulation of MAPK cascade (GO:0043408)",
+                        "regulation of cell fate specification (GO:0042659)", 
+                        "nervous system development (GO:0007399)",
+                        "midgut development (GO:0007494)", 
+                        "heart development (GO:0007507)", 
+                        "mesoderm development (GO:0007498)"
+                        ))
+)
+
+ggplot(results)+
+  geom_point(mapping = aes(x= Term, y=cls, color=Adjusted.P.value, size=generatio),
+        binaxis = 'y', #dotsize = 2,
+               method = 'dotdensity', binpositions = 'all', binwidth = NULL)  + scale_color_gradientn(name="Adjusted.P.value", colours = colorRampPalette(c("firebrick2", "lightgray"))(18), values = rescale(1 / -log10(seq(0, 1, length.out = 18)))[-18])  + theme_bw() +  theme(axis.text.x = element_text(angle = -45, colour="black", family="Arial", hjust = 0, size=8), axis.text.y = element_text(angle= 0, hjust = 1,family="Arial", colour="black", size=10, face="bold"), line = element_blank()) +   geom_point(data=results[results$Adjusted.P.value < 0.1, ],aes(x=Term,y=cls,size=generatio), shape=1, colour="black")
+
+  
+gp = ggplot(results)+
+  geom_bar(mapping = aes(x= Term, y=generatio, fill=Adjusted.P.value), stat="identity") + coord_flip() + scale_fill_gradientn(name="Adjusted.P.value", colours = colorRampPalette(c("firebrick2", "lightgray"))(18), values = rescale(1 / -log10(seq(0, 1, length.out = 18)))[-18]) + theme_bw() + scale_y_continuous(limits=c(0,0.6))
+
+gp + facet_grid(~cls) 
+```
+
+
+#### Enrichment plots for clusters generated from Knoecke et al 
+
+```{r}
+
+ectoderm = read.delim("analysis_koenecke/output/V_E/ectoderm_go.csv", sep=",")
+ectoderm = ectoderm[order(ectoderm$Adjusted.P.value),]
+
+mesoderm = read.delim("analysis_koenecke/output/V_E/mesoderm_go.csv", sep=",")
+mesoderm = mesoderm[order(mesoderm$Adjusted.P.value),]
+
+neuroectoderm = read.delim("analysis_koenecke/output/V_E/neuroectoderm_go.csv", sep=",")
+neuroectoderm = neuroectoderm[order(neuroectoderm$Adjusted.P.value),]
+
+ectoderm.kegg = read.delim("analysis_koenecke/output/V_E/ectoderm_kegg.csv", sep=",")
+ectoderm.kegg = ectoderm.kegg[order(ectoderm.kegg$Adjusted.P.value),]
+
+mesoderm.kegg = read.delim("analysis_koenecke/output/V_E/mesoderm_kegg.csv", sep=",")
+mesoderm.kegg = mesoderm.kegg[order(mesoderm.kegg$Adjusted.P.value),]
+
+neuroectoderm.kegg = read.delim("analysis_koenecke/output/V_E/neuroectoderm_kegg.csv", sep=",")
+neuroectoderm.kegg = neuroectoderm.kegg[order(neuroectoderm.kegg$Adjusted.P.value),]
+
+gobpterms_of_interest = c("dorsal/ventral axis specification (GO:0009950)",
+                          "morphogenesis of a polarized epithelium (GO:0001738)",
+                          'nervous system development (GO:0007399)',
+                          'mesoderm development (GO:0007498)',
+                          'heart development (GO:0007507)',
+                          'brain development (GO:0007420)')
+
+
+foo = ectoderm[ectoderm$Term %in% gobpterms_of_interest, ]
+foo$cls = "EC"
+spam = neuroectoderm[neuroectoderm$Term %in% gobpterms_of_interest, ]
+spam$cls = "NC"
+eggs = mesoderm[mesoderm$Term %in% gobpterms_of_interest, ]
+eggs$cls = "MC"
+
+results = rbind(foo, spam, eggs)
+
+
+results$N = sapply(str_split(results$Overlap, "/"), function(x){as.numeric(x[1])})
+results$D = sapply(str_split(results$Overlap, "/"), function(x){as.numeric(x[2])})
+results$generatio = results$N / results$D
+
+results$cls = factor(results$cls, c("EC", "NC", "MC"))
+
+results$Term = factor(results$Term,
+                      rev(c("dorsal/ventral axis specification (GO:0009950)",
+                            "morphogenesis of a polarized epithelium (GO:0001738)",
+                            'brain development (GO:0007420)',
+                            'nervous system development (GO:0007399)',
+                            'heart development (GO:0007507)',
+                            'mesoderm development (GO:0007498)')))
+
+gp = ggplot(results)+
+  geom_bar(mapping = aes(x= Term, y=generatio, fill=Adjusted.P.value), stat="identity") + coord_flip() + scale_fill_gradientn(name="Adjusted.P.value", colours = colorRampPalette(c("firebrick2", "lightgray"))(18), values = rescale(1 / -log10(seq(0, 1, length.out = 18)))[-18]) + theme_bw() + scale_y_continuous(limits=c(0,0.8))
+
+gp + facet_grid(~cls) 
+
+
+```
+
+
+```{r}
+sessionInfo()
+```

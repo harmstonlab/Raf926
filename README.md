@@ -1,5 +1,5 @@
 ## Data
-* All data for this analysis can obtained from GEO via the study accession number GSE178187. The processed data can also be found in this repository under the folder `data/aligned`.
+* All data for this analysis can be obtained from GEO via the study accession number GSE178187. The processed data can also be found in this repository under the folder `data/aligned`.
 * Data from the [Koenecke et al. paper](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-016-1057-2) can be found on GEO with the accession number [GSE68983](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE68983). The data was downloaded using the `prefetch` command from the SRA Toolkit. The aligned and quantified data can also be found in this repository under the folder `data/koenecke_rnaseq`. 
 * Annotation file used: `Drosophila_melanogaster.BDGP6.22.97.chr.gtf`
 * Reference fasta file used: `dm6.fa` (Ensembl v97)
