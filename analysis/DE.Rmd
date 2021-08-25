@@ -29,8 +29,8 @@ library(lattice)
 library(reshape)
 library(geneplotter)
 library(limma)
-library(dplyr)
 library(EnhancedVolcano)
+library(tidyverse)
 ```
 
 ```{r}
@@ -48,6 +48,16 @@ lfc.threshold = log2(1.5)
 # Removing lowly expressed genes, only to be done once at the start of the differential expression step
 filter = apply(counts(dds, normalized=TRUE), 1, function(x){ mean(x) >= 10 })
 dds = dds[filter, ]
+```
+
+## RLE plot
+```{r}
+rld <- rlog(dds)
+assay(rld) %>%
+  as.data.frame() %>%
+  gather() %>%
+  ggplot(aes(x=key, y=value)) + 
+  geom_boxplot() + ylab("Log Expression ") + xlab("Sample")
 ```
 
 ## Wald Test
