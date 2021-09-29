@@ -30,8 +30,6 @@ library(pheatmap)
 library(Biostrings)
 library(BSgenome.Dmelanogaster.UCSC.dm6)
 library(clusterProfiler)
-library(ReactomePA)
-library(enrichplot)
 library(stringr)
 library(tidyverse)
 library(DT)
@@ -44,8 +42,6 @@ options(connectionObserver = NULL)
 #BiocManager::install("org.Dm.eg.db", character.only = TRUE)
 library("org.Dm.eg.db", character.only = TRUE)
 library(pathview)
-library(reactome.db)
-library(fgsea)
 library(enrichR)
 library(VennDiagram)
 library(png)
@@ -105,12 +101,14 @@ oe <-
   wald_sig %>% 
   as.data.frame() %>%
   filter(log2FoldChange > 0) %>%
+  filter(!(is.na(external_gene_name))) %>%
   arrange(padj)
 
 ue <-
   wald_sig %>% 
   as.data.frame() %>%
   filter(log2FoldChange < 0) %>%
+  filter(!(is.na(external_gene_name))) %>%
   arrange(padj)
 
 sig_genes <- rbind(oe, ue)
