@@ -29,9 +29,6 @@ library(geneplotter)
 library(pheatmap)
 library(Biostrings)
 library(BSgenome.Dmelanogaster.UCSC.dm6)
-library(clusterProfiler)
-library(ReactomePA)
-library(enrichplot)
 library(stringr)
 library(cluster)
 library(factoextra)
@@ -625,6 +622,20 @@ upset(fromList(listInput),
       line.size = 1,
       set_size.show = T)
 ```
+
+```{r}
+## Other Venn Diagrams
+```
+
+```{r}
+oe_ue <- c(lof_oe$external_gene_name, lof_ue$external_gene_name)
+venn = venn.diagram(x=list(Raf926 = oe_ue, "Ectoderm" = na.omit(ectoderm_genes$gene_name)), cat.pos = c(0,30), cat.dist = c(.01,.03), cat.fontfamily = c("Arial", "Arial"), fontfamily = "Arial", lwd = c(1, 1), fill = c("#fea82f", "#45526c"), margin = 0.08, alpha = c(0.7, 0.7), imagetype = "png", print.mode = "raw", filename = "analysis_koenecke/output/V_E/updown_overlaps.png")
+```
+
+```{r}
+venn = venn.diagram(x=list("Raf926 Upregulated"= lof_oe$external_gene_name, "Ectoderm" = na.omit(ectoderm_genes$gene_name)), cat.pos = c(0,10), cat.dist = c(.02,.02), cat.fontfamily = c("Arial", "Arial"), fontfamily = "Arial", lwd = c(1, 1), fill = c("#fea82f", "#45526c"), margin = 0.08, alpha = c(0.7, 0.7), imagetype = "png", print.mode = "raw", filename = "analysis_koenecke/output/V_E/up_ectoderm.png")
+```
+
 
 ## Session Info
 ```{r}
